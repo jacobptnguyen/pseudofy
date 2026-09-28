@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+/* Paper and ink, with one vermilion accent. */
+:root {
+  --bg: #f4f1ea;
+  --panel: #ece7dc;
+  --raised: #faf8f3;
+  --ink: #1d1b17;
+  --muted: #6f6a5f;
+  --rule: #d9d1c1;
+  --rule-soft: #e6dfd1;
+  --sel: #e3dccd;
+  --accent: #c93d22;
+  --accent-ink: #fff8f2;
+  --ok: #3f7d4e;
+  --warn: #a86b12;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17160f;
+    --panel: #1e1d16;
+    --raised: #24231b;
+    --ink: #e9e4d6;
+    --muted: #9a9384;
+    --rule: #37352b;
+    --rule-soft: #24231c;
+    --sel: #2f2d23;
+    --accent: #ee6a4b;
+    --accent-ink: #1b0d08;
+    --ok: #79b387;
+    --warn: #d9a24a;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-rule: var(--rule);
+  --color-sel: var(--sel);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --font-serif: var(--font-newsreader), Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-serif);
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 28%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.press {
+  transition: transform 140ms var(--ease-out), background-color 140ms ease, color 140ms ease;
+}
+.press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Ruled paper: one rule per 28px line, scrolling with the text. */
+.ruled {
+  line-height: 28px;
+  background-image: repeating-linear-gradient(to bottom, transparent 0 27px, var(--rule-soft) 27px 28px);
+  background-attachment: local;
+  background-position: 0 20px;
+}
+
+.panel-in {
+  animation: panel-in 280ms var(--ease-drawer);
+}
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+.bar {
+  transform-origin: left;
+  animation: bar-in 700ms var(--ease-out);
+}
+@keyframes bar-in {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+.sweep {
+  animation: sweep 1.1s linear infinite;
+}
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-in {
+    animation: fade-in 150ms ease;
+  }
+  .bar,
+  .sweep {
+    animation: none;
+  }
+  .press:active:not(:disabled) {
+    transform: none;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
