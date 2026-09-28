@@ -2,7 +2,7 @@
 
 Test how well you really know a codebase. Rebuild a GitHub repo's file tree from memory, explain each file in plain English, and get it graded against the real code.
 
-## [▶ Live Demo]()
+## [▶ Live Demo](https://pseudofy-gn4q.vercel.app/)
 
 ![Pseudofy screenshot](docs/screenshot.png)
 
