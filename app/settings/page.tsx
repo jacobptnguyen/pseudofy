@@ -25,7 +25,7 @@ export default function Settings() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-xl flex-col gap-8 px-4 py-10">
       <Link href="/" className="font-mono text-[13px] text-muted hover:text-ink">
-        ← Back to editor
+        ← Back
       </Link>
 
       <header>

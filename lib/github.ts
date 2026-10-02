@@ -76,12 +76,16 @@ export function pickFiles(
 
 const enc = (p: string) => p.split("/").map(encodeURIComponent).join("/");
 
-export async function fetchRepo(owner: string, repo: string, userPaths: string[]): Promise<RepoData> {
+function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return headers;
+}
 
+/** Default branch plus every non-noise file in the repo, with sizes. */
+export async function fetchTree(owner: string, repo: string) {
   const api = async (path: string) => {
-    const res = await fetch(`https://api.github.com/repos/${enc(owner)}/${enc(repo)}${path}`, { headers });
+    const res = await fetch(`https://api.github.com/repos/${enc(owner)}/${enc(repo)}${path}`, { headers: authHeaders() });
     if (res.status === 404) throw fail("Repo not found or private", 404);
     if (res.status === 403 || res.status === 429) throw fail("GitHub rate limit hit, try again later", 429);
     if (res.status === 409) throw fail("Repo is empty", 400);
@@ -94,6 +98,17 @@ export async function fetchRepo(owner: string, repo: string, userPaths: string[]
   const blobs: { path: string; size: number }[] = treeRes.tree
     .filter((e: { type: string; path: string }) => e.type === "blob" && !isNoise(e.path))
     .map((e: { path: string; size?: number }) => ({ path: e.path, size: e.size ?? 0 }));
+  return { branch: branch as string, blobs, truncated: Boolean(treeRes.truncated) };
+}
+
+export async function fetchRepo(
+  owner: string,
+  repo: string,
+  userPaths: string[],
+  tree?: Awaited<ReturnType<typeof fetchTree>>
+): Promise<RepoData> {
+  const { branch, blobs, truncated } = tree ?? (await fetchTree(owner, repo));
+  const headers = authHeaders();
 
   const { fetch: toFetch, omitted } = pickFiles(blobs, userPaths);
   const contents: Record<string, string> = {};
@@ -115,5 +130,5 @@ export async function fetchRepo(owner: string, repo: string, userPaths: string[]
   };
   await Promise.all(Array.from({ length: 8 }, worker));
 
-  return { tree: blobs.map((b) => b.path), contents, omitted, truncated: Boolean(treeRes.truncated) };
+  return { tree: blobs.map((b) => b.path), contents, omitted, truncated };
 }

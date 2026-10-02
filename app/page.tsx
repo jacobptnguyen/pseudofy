@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { getKey } from "@/lib/key";
-import type { GradeError, GradeRequest, GradeResult } from "@/lib/types";
+import { DIFFICULTIES, TEMPLATE, type Difficulty, type GradeError, type GradeRequest, type GradeResult, type TreeResponse } from "@/lib/types";
 
 type Files = Record<string, string>;
 type Node = { name: string; path: string; dir: boolean; children: Node[] };
 type Editing = { kind: "file" | "folder" | "rename"; parent: string; target?: string; value: string; error?: string };
 
 const STORAGE_KEY = "pseudofy:v1";
+const PICK_KEY = "pseudofy:pick";
 
 // ---------- tree helpers (paths: folders end with "/", files don't) ----------
 
@@ -74,7 +75,7 @@ function movePath(files: Files, from: string, to: string): Files {
 
 // ---------- storage (optional: the page works without it) ----------
 
-function load(): { files?: Files; repoUrl?: string; selected?: string | null } {
+function load(): { files?: Files; repoUrl?: string; selected?: string | null; difficulty?: Difficulty; hints?: Files } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : {};
@@ -89,6 +90,9 @@ export default function Page() {
   const [files, setFiles] = useState<Files>({});
   const [repoUrl, setRepoUrl] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [difficulty, setDifficulty] = useState<Difficulty | null>(null);
+  const [hints, setHints] = useState<Files>({});
+  const [confirmingChange, setConfirmingChange] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -112,7 +116,14 @@ export default function Page() {
     const saved = load();
     /* eslint-disable react-hooks/set-state-in-effect -- one-time read of browser-only storage */
     if (saved.files && typeof saved.files === "object") {
-      setFiles(Object.fromEntries(Object.entries(saved.files).filter(([, v]) => typeof v === "string")));
+      const kept = Object.fromEntries(Object.entries(saved.files).filter(([, v]) => typeof v === "string"));
+      setFiles(kept);
+      // Sessions saved before difficulty existed were all from-memory, i.e. hard.
+      if (Object.keys(kept).length > 0) setDifficulty("hard");
+    }
+    if (saved.difficulty && DIFFICULTIES.includes(saved.difficulty)) setDifficulty(saved.difficulty);
+    if (saved.hints && typeof saved.hints === "object") {
+      setHints(Object.fromEntries(Object.entries(saved.hints).filter(([, v]) => typeof v === "string")));
     }
     if (typeof saved.repoUrl === "string") setRepoUrl(saved.repoUrl);
     if (typeof saved.selected === "string") setSelected(saved.selected);
@@ -124,11 +135,43 @@ export default function Page() {
   useEffect(() => {
     if (!hydrated) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ files, repoUrl, selected }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ files, repoUrl, selected, difficulty, hints }));
     } catch {
       // storage full or blocked: keep working in memory
     }
-  }, [files, repoUrl, selected, hydrated]);
+  }, [files, repoUrl, selected, difficulty, hints, hydrated]);
+
+  const locked = difficulty === "easy" || difficulty === "medium";
+
+  const start = (d: Difficulty, url: string, seeded: Files, seededHints: Files) => {
+    setDifficulty(d);
+    setHints(seededHints);
+    setRepoUrl(url);
+    setFiles(seeded);
+    setSelected(null);
+    setCollapsed(new Set());
+    setEditing(null);
+    setResult(null);
+    setError(null);
+    setPanelOpen(false);
+  };
+
+  const changeDifficulty = () => {
+    const written = Object.values(files).some((v) => v.trim() && v.trim() !== TEMPLATE.trim());
+    if (written) setConfirmingChange(true);
+    else resetToStart();
+  };
+
+  const resetToStart = () => {
+    setConfirmingChange(false);
+    setDifficulty(null);
+    setHints({});
+    setFiles({});
+    setSelected(null);
+    setResult(null);
+    setError(null);
+    setPanelOpen(false);
+  };
 
   // ---- tree actions ----
 
@@ -224,7 +267,9 @@ export default function Page() {
     setResult(null);
     setPanelOpen(true);
     try {
-      const body: GradeRequest = { repoUrl: repoUrl.trim(), files };
+      // Template text the user never edited counts as unwritten.
+      const sent = Object.fromEntries(Object.entries(files).map(([p, v]) => [p, v.trim() === TEMPLATE.trim() ? "" : v]));
+      const body: GradeRequest = { repoUrl: repoUrl.trim(), files: sent, difficulty: difficulty ?? "hard" };
       const res = await fetch("/api/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-anthropic-key": getKey() },
@@ -306,7 +351,7 @@ export default function Page() {
                     setSelected(n.path);
                     if (n.dir) toggle(n.path);
                   }}
-                  onDoubleClick={() => startRename(n.path)}
+                  onDoubleClick={() => !locked && startRename(n.path)}
                   title={n.path}
                   style={{ paddingLeft: 12 + depth * 14 }}
                   className={`flex min-w-0 flex-1 items-center gap-1.5 py-[3px] pr-1 text-left font-mono text-[13px] ${
@@ -319,14 +364,16 @@ export default function Page() {
                     <span aria-label="no explanation yet" className="ml-auto size-1.5 shrink-0 rounded-full bg-muted/40" />
                   )}
                 </button>
-                <div className="flex shrink-0 pr-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
-                  <IconButton label={`Rename ${n.name}`} onClick={() => startRename(n.path)}>
-                    ✎
-                  </IconButton>
-                  <IconButton label={`Delete ${n.name}`} onClick={() => remove(n.path)}>
-                    ×
-                  </IconButton>
-                </div>
+                {!locked && (
+                  <div className="flex shrink-0 pr-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
+                    <IconButton label={`Rename ${n.name}`} onClick={() => startRename(n.path)}>
+                      ✎
+                    </IconButton>
+                    <IconButton label={`Delete ${n.name}`} onClick={() => remove(n.path)}>
+                      ×
+                    </IconButton>
+                  </div>
+                )}
               </div>
             )}
             {open && renderNodes(n.children, n.path, depth + 1)}
@@ -338,6 +385,9 @@ export default function Page() {
 
   const explanation = selectedIsFile ? files[selected!] : "";
   const words = explanation.trim() ? explanation.trim().split(/\s+/).length : 0;
+
+  if (!hydrated) return <div className="h-dvh" />;
+  if (!difficulty) return <Start url={repoUrl} setUrl={setRepoUrl} onStart={start} />;
 
   return (
     <div className="flex h-dvh flex-col">
@@ -370,8 +420,18 @@ export default function Page() {
           value={repoUrl}
           onChange={(e) => setRepoUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && grade()}
-          className="h-8 min-w-0 flex-1 rounded-md border border-rule bg-raised px-2.5 font-mono text-[13px] text-ink placeholder:text-muted/70 focus-visible:border-accent focus-visible:outline-none sm:max-w-xl sm:mx-auto"
+          readOnly={locked}
+          className="h-8 min-w-0 flex-1 rounded-md border border-rule bg-raised px-2.5 font-mono text-[13px] text-ink placeholder:text-muted/70 focus-visible:border-accent focus-visible:outline-none read-only:text-muted sm:max-w-xl sm:mx-auto"
         />
+        <button
+          type="button"
+          onClick={changeDifficulty}
+          title="Change difficulty"
+          aria-label={`Difficulty: ${difficulty}. Change difficulty`}
+          className="press h-8 shrink-0 rounded-md px-2.5 font-mono text-xs capitalize text-muted hover:bg-sel hover:text-ink"
+        >
+          {difficulty}
+        </button>
         {(result || error) && !panelOpen && !loading && (
           <button
             type="button"
@@ -421,15 +481,19 @@ export default function Page() {
               className="absolute inset-y-0 left-0 z-20 flex w-64 flex-col border-r border-rule bg-panel shadow-xl md:static md:shadow-none"
             >
               <div className="flex h-9 shrink-0 items-center justify-between pl-3 pr-1.5">
-                <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">From memory</span>
-                <div className="flex">
-                  <IconButton label="New file" onClick={() => startCreate("file")}>
-                    <span className="font-mono text-[13px]">+f</span>
-                  </IconButton>
-                  <IconButton label="New folder" onClick={() => startCreate("folder")}>
-                    <span className="font-mono text-[13px]">+d</span>
-                  </IconButton>
-                </div>
+                <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+                  {locked ? "Repository" : "From memory"}
+                </span>
+                {!locked && (
+                  <div className="flex">
+                    <IconButton label="New file" onClick={() => startCreate("file")}>
+                      <span className="font-mono text-[13px]">+f</span>
+                    </IconButton>
+                    <IconButton label="New folder" onClick={() => startCreate("folder")}>
+                      <span className="font-mono text-[13px]">+d</span>
+                    </IconButton>
+                  </div>
+                )}
               </div>
               <div
                 className="min-h-0 flex-1 overflow-y-auto pb-6"
@@ -465,6 +529,12 @@ export default function Page() {
             </span>
             {selectedIsFile && <span className="shrink-0 tabular-nums">{words} words</span>}
           </div>
+          {selectedIsFile && hints[selected!] && (
+            <p className="shrink-0 border-b border-rule bg-panel px-5 py-2 text-[14px] leading-snug text-muted md:px-10">
+              <span className="font-mono text-[11px] uppercase tracking-[0.12em]">Hint</span>
+              <span className="ml-3 text-ink/85">{hints[selected!]}</span>
+            </p>
+          )}
           <div className="relative min-h-0 flex-1">
             <label htmlFor="explanation" className="sr-only">
               {selectedIsFile ? `Explanation of ${selected}` : "Explanation (select a file first)"}
@@ -535,7 +605,218 @@ export default function Page() {
           </>
         )}
       </div>
+      {confirmingChange && (
+        <ConfirmDialog
+          title="Start over?"
+          body="Changing the difficulty clears everything you've written so far."
+          confirmLabel="Clear and continue"
+          onConfirm={resetToStart}
+          onCancel={() => setConfirmingChange(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// ---------- confirm dialog ----------
+
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!ref.current?.open) ref.current?.showModal(); // strict mode runs effects twice
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby="confirm-title"
+      aria-describedby="confirm-body"
+      onCancel={(e) => {
+        e.preventDefault();
+        onCancel();
+      }}
+      onClick={(e) => e.target === e.currentTarget && onCancel()}
+      className="dialog m-auto w-[min(26rem,calc(100%-2rem))] rounded-lg border border-rule bg-panel p-0 text-ink shadow-xl"
+    >
+      <div className="p-6">
+        <h2 id="confirm-title" className="text-2xl leading-tight tracking-tight">
+          {title}
+        </h2>
+        <p id="confirm-body" className="mt-2 text-[15px] leading-relaxed text-muted">
+          {body}
+        </p>
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            autoFocus
+            onClick={onCancel}
+            className="press h-9 rounded-md border border-rule px-4 font-mono text-[13px] hover:bg-sel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="press h-9 rounded-md bg-accent px-4 font-mono text-[13px] font-medium text-accent-ink hover:brightness-110"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+// ---------- start screen ----------
+
+const LEVELS: { id: Difficulty; blurb: string }[] = [
+  { id: "easy", blurb: "The file tree and a template for every file. Fill in what each one does." },
+  { id: "medium", blurb: "The file tree only. Write every explanation yourself." },
+  { id: "hard", blurb: "Nothing given. Rebuild the tree from memory, then explain it." },
+];
+
+function Start({ url, setUrl, onStart }: { url: string; setUrl: (u: string) => void; onStart: (d: Difficulty, url: string, files: Files, hints: Files) => void }) {
+  // Remembered for the round trip to Settings. Start only renders after hydration, so reading here is safe.
+  const [pick, setPickState] = useState<Difficulty | null>(() => {
+    try {
+      const v = sessionStorage.getItem(PICK_KEY) as Difficulty | null;
+      return v && DIFFICULTIES.includes(v) ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const setPick = (d: Difficulty | null) => {
+    setPickState(d);
+    try {
+      if (d) sessionStorage.setItem(PICK_KEY, d);
+      else sessionStorage.removeItem(PICK_KEY);
+    } catch {
+      // storage blocked: the pick just won't survive leaving the page
+    }
+  };
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const givesTree = pick === "easy" || pick === "medium";
+  const ready = pick !== null && url.trim() !== "" && !busy;
+
+  const go = async () => {
+    if (!pick || !ready) return;
+    if (!givesTree) {
+      setPick(null);
+      return onStart(pick, url.trim(), {}, {});
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/tree", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-anthropic-key": getKey() },
+        body: JSON.stringify({ repoUrl: url.trim(), difficulty: pick }),
+      });
+      const data: TreeResponse | GradeError | null = await res.json().catch(() => null);
+      if (!res.ok || !data || "error" in data) {
+        setError(data && "error" in data ? data.error : `Couldn't load the repository (HTTP ${res.status}).`);
+      } else {
+        setPick(null);
+        onStart(pick, url.trim(), Object.fromEntries(data.paths.map((p) => [p, pick === "easy" ? TEMPLATE : ""])), data.hints ?? {});
+      }
+    } catch {
+      setError("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="grid min-h-dvh place-items-center px-4 py-10">
+      <form
+        className="w-full max-w-xl"
+        onSubmit={(e) => {
+          e.preventDefault();
+          go();
+        }}
+      >
+        <div className="flex items-center justify-between">
+          <p className="text-xl leading-none tracking-tight">
+            pseudo<em className="text-accent">fy</em>
+          </p>
+          <Link
+            href="/settings"
+            aria-label="Settings"
+            title="Settings"
+            className="press grid size-8 place-items-center rounded-md text-muted hover:bg-sel hover:text-ink"
+          >
+            <GearGlyph />
+          </Link>
+        </div>
+        <h1 className="mt-8 text-4xl leading-tight tracking-tight">Choose a difficulty</h1>
+
+        <div role="radiogroup" aria-label="Difficulty" className="mt-6 divide-y divide-rule border-y border-rule">
+          {LEVELS.map((l) => {
+            const on = pick === l.id;
+            return (
+              <button
+                key={l.id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => setPick(l.id)}
+                className={`flex w-full items-baseline gap-4 border-l-2 px-4 py-3.5 text-left transition-colors duration-150 focus-visible:-outline-offset-2 ${
+                  on ? "border-l-accent bg-sel" : "border-l-transparent hover:bg-sel/60"
+                }`}
+              >
+                <span className="w-24 shrink-0 text-xl italic capitalize">{l.id}</span>
+                <span className="text-[15px] leading-snug text-muted">{l.blurb}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <label htmlFor="start-repo" className="mt-6 block font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+          Repository URL
+        </label>
+        <input
+          id="start-repo"
+          type="url"
+          inputMode="url"
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="https://github.com/owner/repo"
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setError(null);
+          }}
+          aria-invalid={!!error}
+          className="mt-2 h-10 w-full rounded-md border border-rule bg-raised px-3 font-mono text-[13px] text-ink placeholder:text-muted/70 focus-visible:border-accent focus-visible:outline-none"
+        />
+        {error && (
+          <p role="alert" className="mt-2 font-mono text-[12px] text-accent">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={!ready}
+          className="press mt-6 flex h-10 items-center gap-2 rounded-md bg-accent px-5 font-mono text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:bg-rule disabled:text-muted"
+        >
+          {busy && <span className="size-3 animate-spin rounded-full border-2 border-current border-r-transparent" />}
+          {busy ? (pick === "easy" ? "Writing hints" : "Loading") : "Start"}
+        </button>
+      </form>
+    </main>
   );
 }
 
